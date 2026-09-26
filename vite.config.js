@@ -1,14 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite'; // <-- Importa el plugin
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    tailwindcss(), // <-- Añádelo aquí
+  ],
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     watch: {
-      // Ignora la carpeta de compilación de Tauri para evitar el error EBUSY
       ignored: ["**/src-tauri/target/**"],
     },
   },

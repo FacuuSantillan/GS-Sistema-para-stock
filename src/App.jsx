@@ -5,13 +5,11 @@ import "./App.css";
 import Encabezado from "./componentes/encabezado/Encabezado";
 
 function App() {
- 
-
   return (
-    <div className="app">
+    <div className="min-h-screen bg-[#0B0F17] text-white p-6">
       <Encabezado />
-      <main className="container">
-        
+      <main>
+        {/* Aquí irá el resto de tu contenido o tablas */}
       </main>
     </div>
   );
