@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeTextFile } from '@tauri-apps/plugin-fs';
 import Database from '@tauri-apps/plugin-sql';
 import { 
   Search, 
@@ -16,7 +18,8 @@ import {
   Plus,
   Minus,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Download
 } from "lucide-react";
 
 export default function SeccionInventario({ onProductoActualizado }) {
@@ -127,6 +130,58 @@ export default function SeccionInventario({ onProductoActualizado }) {
     }
   };
 
+  // Función de exportación a Excel corregida en su ubicación correcta
+ const exportarAExcel = async () => {
+    if (productos.length === 0) {
+      alert("No hay productos en el inventario para exportar.");
+      return;
+    }
+
+    try {
+      // 1. Abrir el selector nativo de Windows/Linux/Mac para elegir dónde guardar
+      const fechaStr = new Date().toISOString().slice(0, 10);
+      const rutaArchivo = await save({
+        defaultPath: `Inventario_Stock_${fechaStr}.csv`,
+        filters: [{
+          name: 'Archivo CSV (Excel)',
+          extensions: ['csv']
+        }]
+      });
+
+      // Si el usuario cancela la ventana, no hacemos nada
+      if (!rutaArchivo) return;
+
+      // 2. Construir el contenido CSV
+      const cabeceras = ["ID", "Nombre", "SKU", "Categoría", "Proveedor", "Lote", "Vencimiento", "Stock", "Costo ($)", "Precio Venta ($)"];
+      
+      const filas = productos.map(p => [
+        p.id,
+        `"${(p.nombre || "").replace(/"/g, '""')}"`,
+        `"${p.sku || ""}"`,
+        `"${p.categoria || ""}"`,
+        `"${p.proveedor || ""}"`,
+        `"${p.lote || "S/N"}"`,
+        p.vencimiento || "Sin fecha",
+        p.stock,
+        p.costo,
+        p.precio
+      ]);
+
+      const contenidoCSV = [
+        cabeceras.join(","),
+        ...filas.map(f => f.join(","))
+      ].join("\n");
+
+      // 3. Escribir el archivo físicamente en la PC usando Tauri FS con codificación UTF-8 (BOM)
+      await writeTextFile(rutaArchivo, "\uFEFF" + contenidoCSV);
+
+      alert("¡Inventario exportado a Excel con éxito!");
+    } catch (error) {
+      console.error("Error al exportar archivo:", error);
+      alert("Hubo un error al exportar el archivo: " + error);
+    }
+  };
+
   const proveedoresUnicos = ["TODOS", ...new Set(productos.map(p => p.proveedor).filter(Boolean))];
   const categoriasUnicas = ["TODAS", ...new Set(productos.map(p => p.categoria).filter(Boolean))];
 
@@ -186,12 +241,23 @@ export default function SeccionInventario({ onProductoActualizado }) {
               <p className="text-xs text-slate-400">Mostrando {productosFiltrados.length} productos en total</p>
             </div>
           </div>
-          <button
-            onClick={cargarInventario}
-            className="cursor-pointer px-3 py-1.5 bg-[#0b0f17] hover:bg-[#1a2333] border border-slate-700/60 rounded-xl text-xs font-semibold text-slate-300 transition-all flex items-center gap-1.5"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Actualizar
-          </button>
+
+          {/* Grupo de botones de acción */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportarAExcel}
+              className="cursor-pointer px-3 py-1.5 bg-[#0b0f17] hover:bg-[#1a2333] border border-[#CCFF00]/40 text-[#CCFF00] rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-[0_0_10px_rgba(204,255,0,0.1)]"
+            >
+              <Download className="w-3.5 h-3.5" /> Exportar a Excel (CSV)
+            </button>
+
+            <button
+              onClick={cargarInventario}
+              className="cursor-pointer px-3 py-1.5 bg-[#0b0f17] hover:bg-[#1a2333] border border-slate-700/60 rounded-xl text-xs font-semibold text-slate-300 transition-all flex items-center gap-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Actualizar
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2">
@@ -551,7 +617,7 @@ export default function SeccionInventario({ onProductoActualizado }) {
                       type="date"
                       value={productoSeleccionado.vencimiento || ""}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, vencimiento: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white [color-scheme:dark]"
                     />
                   </div>
                 </div>
@@ -581,7 +647,7 @@ export default function SeccionInventario({ onProductoActualizado }) {
                 </div>
                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
                   <button type="button" onClick={() => setIsEditing(false)} className="cursor-pointer px-5 py-2.5 bg-[#1a2333] text-slate-200 rounded-xl font-medium">Cancelar</button>
-                  <button type="submit" className="cursor-pointer px5 py-2.5 bg-[#CCFF00] text-black font-bold rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.25)] flex items-center gap-1.5">
+                  <button type="submit" className="cursor-pointer px-5 py-2.5 bg-[#CCFF00] text-black font-bold rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.25)] flex items-center gap-1.5">
                     <Check className="w-4 h-4" /> Guardar Cambios
                   </button>
                 </div>
