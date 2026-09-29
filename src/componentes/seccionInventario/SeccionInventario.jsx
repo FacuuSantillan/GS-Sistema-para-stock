@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { save } from '@tauri-apps/plugin-dialog';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
 import Database from '@tauri-apps/plugin-sql';
 import { 
   Search, 
@@ -130,56 +128,43 @@ export default function SeccionInventario({ onProductoActualizado }) {
     }
   };
 
-  // Función de exportación a Excel corregida en su ubicación correcta
- const exportarAExcel = async () => {
+  // Función de exportación a Excel (CSV con Blob del navegador)
+  const exportarAExcel = () => {
     if (productos.length === 0) {
       alert("No hay productos en el inventario para exportar.");
       return;
     }
 
-    try {
-      // 1. Abrir el selector nativo de Windows/Linux/Mac para elegir dónde guardar
-      const fechaStr = new Date().toISOString().slice(0, 10);
-      const rutaArchivo = await save({
-        defaultPath: `Inventario_Stock_${fechaStr}.csv`,
-        filters: [{
-          name: 'Archivo CSV (Excel)',
-          extensions: ['csv']
-        }]
-      });
+    const cabeceras = ["ID", "Nombre", "SKU", "Categoría", "Proveedor", "Lote", "Vencimiento", "Stock", "Costo ($)", "Precio Venta ($)"];
+    
+    const filas = productos.map(p => [
+      p.id,
+      `"${(p.nombre || "").replace(/"/g, '""')}"`,
+      `"${p.sku || ""}"`,
+      `"${p.categoria || ""}"`,
+      `"${p.proveedor || ""}"`,
+      `"${p.lote || "S/N"}"`,
+      p.vencimiento || "Sin fecha",
+      p.stock,
+      p.costo,
+      p.precio
+    ]);
 
-      // Si el usuario cancela la ventana, no hacemos nada
-      if (!rutaArchivo) return;
+    const contenidoCSV = [
+      cabeceras.join(","),
+      ...filas.map(f => f.join(","))
+    ].join("\n");
 
-      // 2. Construir el contenido CSV
-      const cabeceras = ["ID", "Nombre", "SKU", "Categoría", "Proveedor", "Lote", "Vencimiento", "Stock", "Costo ($)", "Precio Venta ($)"];
-      
-      const filas = productos.map(p => [
-        p.id,
-        `"${(p.nombre || "").replace(/"/g, '""')}"`,
-        `"${p.sku || ""}"`,
-        `"${p.categoria || ""}"`,
-        `"${p.proveedor || ""}"`,
-        `"${p.lote || "S/N"}"`,
-        p.vencimiento || "Sin fecha",
-        p.stock,
-        p.costo,
-        p.precio
-      ]);
-
-      const contenidoCSV = [
-        cabeceras.join(","),
-        ...filas.map(f => f.join(","))
-      ].join("\n");
-
-      // 3. Escribir el archivo físicamente en la PC usando Tauri FS con codificación UTF-8 (BOM)
-      await writeTextFile(rutaArchivo, "\uFEFF" + contenidoCSV);
-
-      alert("¡Inventario exportado a Excel con éxito!");
-    } catch (error) {
-      console.error("Error al exportar archivo:", error);
-      alert("Hubo un error al exportar el archivo: " + error);
-    }
+    const blob = new Blob(["\uFEFF" + contenidoCSV], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement("a");
+    link.href = url;
+    const fechaStr = new Date().toISOString().slice(0, 10);
+    link.setAttribute("download", `Inventario_Stock_${fechaStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const proveedoresUnicos = ["TODOS", ...new Set(productos.map(p => p.proveedor).filter(Boolean))];
@@ -364,6 +349,7 @@ export default function SeccionInventario({ onProductoActualizado }) {
                   }
 
                   return (
+                    
                     <tr key={p.id} className="hover:bg-[#1a2333]/40 transition-all">
                       <td className="py-4 px-4">
                         <div className="font-bold text-white">{p.nombre}</div>
@@ -603,7 +589,7 @@ export default function SeccionInventario({ onProductoActualizado }) {
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 font-semibold mb-1">Lote</label>
+                    <label className="block text-slate-300 font-semibold smudge mb-1">Lote</label>
                     <input
                       type="text"
                       value={productoSeleccionado.lote || ""}

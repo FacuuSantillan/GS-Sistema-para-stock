@@ -15,8 +15,20 @@ export default function SeccionEstadisticas() {
   });
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+useEffect(() => {
     calcularEstadisticas();
+
+    // Escuchar el evento en tiempo real cuando se agregue, modifique o elimine stock
+    const handleStockActualizado = () => {
+      calcularEstadisticas();
+    };
+
+    window.addEventListener("stockActualizado", handleStockActualizado);
+
+    // Limpiar el evento al desmontar el componente
+    return () => {
+      window.removeEventListener("stockActualizado", handleStockActualizado);
+    };
   }, []);
 
   const calcularEstadisticas = async () => {
@@ -220,7 +232,6 @@ export default function SeccionEstadisticas() {
           </div>
         </div>
       </div>
-
 
     </div>
   );

@@ -100,8 +100,7 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
     try {
       const db = await Database.load("sqlite:suplementos.db");
 
-      // Si estamos creando un producto nuevo (no seleccionado por autocompletar),
-      // verificamos estrictamente si el SKU ya existe en la base de datos.
+      // Si estamos creando un producto nuevo, verificamos estrictamente si el SKU ya existe.
       if (!esExistente) {
         const skuDuplicado = await db.select(
           "SELECT id FROM suplementos WHERE sku = ?", 
@@ -110,18 +109,17 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
 
         if (skuDuplicado.length > 0) {
           alert(`⚠️ El código SKU "${formData.sku}" ya pertenece a otro producto registrado. No se permiten SKUs duplicados.`);
-          return; // Detenemos el guardado por completo
+          return; 
         }
       }
 
-      // Si es un producto existente seleccionado, actualizamos o ingresamos el lote asegurando unicidad del SKU
+      // Verificamos si ya existe el mismo SKU y el mismo lote
       const loteExistente = await db.select(
         "SELECT id FROM suplementos WHERE sku = ? AND lote = ?",
         [formData.sku, formData.lote || "Sin lote"]
       );
 
       if (loteExistente.length > 0) {
-        // Si el mismo SKU y el mismo lote ya existen, sumamos stock
         await db.execute(
           `UPDATE suplementos 
            SET stock = stock + ?, vencimiento = ?, costo = ?, precio = ? 
@@ -136,7 +134,6 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
           ]
         );
       } else {
-        // Insertamos nuevo registro asegurando que conserve el nombre del SKU único
         await db.execute(
           `INSERT INTO suplementos (nombre, sku, categoria, proveedor, lote, vencimiento, stock, costo, precio) 
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -153,6 +150,9 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
           ]
         );
       }
+
+      // 🚀 DISPARAR EVENTO EN TIEMPO REAL PARA ACTUALIZAR ESTADÍSTICAS E INVENTARIO
+      window.dispatchEvent(new Event("stockActualizado"));
 
       console.log("¡Operación completada con éxito!");
       if (onSave) onSave(formData);
@@ -178,6 +178,7 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
             Añadir nuevo suplemento / Ingreso de Lote
           </h2>
           <button 
+            type="button"
             onClick={onClose}
             className="cursor-pointer text-slate-400 hover:text-white bg-[#1a2333] hover:bg-[#232f46] p-2 rounded-xl transition-all border border-slate-700/50"
           >
@@ -211,7 +212,7 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
                 type="text" 
                 name="nombre" 
                 required
-                readOnly={esExistente} // Si es existente, el nombre oficial se mantiene atado al SKU
+                readOnly={esExistente}
                 placeholder="Ej. Creatina 500g" 
                 value={formData.nombre}
                 onChange={handleChange}
@@ -230,7 +231,7 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
                 type="text" 
                 name="sku" 
                 required
-                readOnly={esExistente} // Bloqueado para prevenir duplicidad
+                readOnly={esExistente}
                 placeholder="Ej. SUP-CRE-001" 
                 value={formData.sku}
                 onChange={handleChange}
@@ -313,12 +314,12 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
                 Vencimiento
               </label>
               <input 
-  type="date" 
-  name="vencimiento" 
-  value={formData.vencimiento}
-  onChange={handleChange}
-  className="w-full bg-[#0b0f17] border border-slate-700/80 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#CCFF00] transition-all [color-scheme:dark]"
-/>
+                type="date" 
+                name="vencimiento" 
+                value={formData.vencimiento}
+                onChange={handleChange}
+                className="w-full bg-[#0b0f17] border border-slate-700/80 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#CCFF00] transition-all [color-scheme:dark]"
+              />
             </div>
           </div>
 
@@ -421,6 +422,7 @@ export default function ModalAgregarProducto({ isOpen, onClose, onSave }) {
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xl font-bold text-white">Seleccionar producto</h3>
               <button 
+                type="button"
                 onClick={() => setIsSearchModalOpen(false)}
                 className="cursor-pointer text-slate-400 hover:text-white bg-[#1a2333] hover:bg-[#232f46] p-2 rounded-xl transition-all border border-slate-700/50"
               >
