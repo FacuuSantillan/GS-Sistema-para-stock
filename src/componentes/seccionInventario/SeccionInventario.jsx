@@ -129,32 +129,36 @@ export default function SeccionInventario({ onProductoActualizado }) {
   };
 
   // Función de exportación a Excel (CSV con Blob del navegador)
-  const exportarAExcel = () => {
+const exportarAExcel = () => {
     if (productos.length === 0) {
       alert("No hay productos en el inventario para exportar.");
       return;
     }
 
+    // Cabeceras limpias
     const cabeceras = ["ID", "Nombre", "SKU", "Categoría", "Proveedor", "Lote", "Vencimiento", "Stock", "Costo ($)", "Precio Venta ($)"];
     
+    // Mapeo seguro con punto y coma (;) para que Excel separe bien las columnas en español
     const filas = productos.map(p => [
       p.id,
       `"${(p.nombre || "").replace(/"/g, '""')}"`,
-      `"${p.sku || ""}"`,
-      `"${p.categoria || ""}"`,
-      `"${p.proveedor || ""}"`,
-      `"${p.lote || "S/N"}"`,
+      `"${(p.sku || "").replace(/"/g, '""')}"`,
+      `"${(p.categoria || "").replace(/"/g, '""')}"`,
+      `"${(p.proveedor || "").replace(/"/g, '""')}"`,
+      `"${(p.lote || "S/N").replace(/"/g, '""')}"`,
       p.vencimiento || "Sin fecha",
-      p.stock,
-      p.costo,
-      p.precio
+      p.stock || 0,
+      p.costo || 0,
+      p.precio || 0
     ]);
 
+    // Unir usando punto y coma (;) como delimitador estándar para Excel en español
     const contenidoCSV = [
-      cabeceras.join(","),
-      ...filas.map(f => f.join(","))
+      cabeceras.join(";"),
+      ...filas.map(f => f.join(";"))
     ].join("\n");
 
+    // Codificación UTF-8 con BOM para las tildes y eñes
     const blob = new Blob(["\uFEFF" + contenidoCSV], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     
