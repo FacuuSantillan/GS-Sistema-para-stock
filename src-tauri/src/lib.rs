@@ -3,7 +3,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let migrations = vec![
-        Migration {
+   Migration {
             version: 1,
             description: "crear_tabla_suplementos",
             sql: "CREATE TABLE IF NOT EXISTS suplementos (
@@ -12,14 +12,16 @@ pub fn run() {
                 sku TEXT NOT NULL,
                 categoria TEXT NOT NULL,
                 proveedor TEXT NOT NULL,
+                unidad_medida TEXT DEFAULT 'U',
                 lote TEXT,
                 vencimiento TEXT,
-                stock INTEGER NOT NULL,
+                stock REAL NOT NULL,
                 costo REAL NOT NULL,
                 precio REAL NOT NULL
             );",
             kind: MigrationKind::Up,
         },
+        
         Migration {
             version: 2,
             description: "crear_tabla_movimientos",

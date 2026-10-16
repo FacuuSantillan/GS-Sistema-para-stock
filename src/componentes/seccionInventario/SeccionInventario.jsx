@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import ModalImportarExcel from "../modalImportarExcel/modalImportarExcel"; // Ajusta la ruta según tu estructura
+import { UploadCloud } from "lucide-react"; // O el ícono que prefieras
 import Database from '@tauri-apps/plugin-sql';
 import { 
   Search, 
@@ -17,7 +19,10 @@ import {
   Minus,
   ChevronLeft,
   ChevronRight,
-  Download
+  Download,
+  AlertTriangle,
+  XCircle,
+  CheckCircle2
 } from "lucide-react";
 
 export default function SeccionInventario({ onProductoActualizado }) {
@@ -31,6 +36,8 @@ export default function SeccionInventario({ onProductoActualizado }) {
   const [filtroVencimiento, setFiltroVencimiento] = useState("TODOS");
   const [filtroEstadoStock, setFiltroEstadoStock] = useState("TODOS");
 
+const [modalImportarOpen, setModalImportarOpen] = useState(false);
+
   // Estado de Paginación
   const [paginaActual, setPaginaActual] = useState(1);
   const productosPorPagina = 20;
@@ -39,11 +46,44 @@ export default function SeccionInventario({ onProductoActualizado }) {
   const [productoSeleccionado, setProductoSeleccionado] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
 
+  // Estado para alertas/notificaciones modales
+  const [modalAlerta, setModalAlerta] = useState({
+    visible: false,
+    titulo: "",
+    mensaje: "",
+    tipo: "error", // "error" | "warning" | "success"
+  });
+
+  // Estado para modal de confirmación de eliminación
+  const [modalConfirmacion, setModalConfirmacion] = useState({
+    visible: false,
+    id: null,
+    nombre: "",
+    lote: "",
+  });
+
+  const mostrarAlerta = (titulo, mensaje, tipo = "error") => {
+    setModalAlerta({ visible: true, titulo, mensaje, tipo });
+  };
+
+  const cerrarAlerta = () => {
+    setModalAlerta({ visible: false, titulo: "", mensaje: "", tipo: "error" });
+  };
+
   useEffect(() => {
     cargarInventario();
+
+    const handleActualizar = () => {
+      cargarInventario();
+    };
+
+    window.addEventListener("stockActualizado", handleActualizar);
+
+    return () => {
+      window.removeEventListener("stockActualizado", handleActualizar);
+    };
   }, []);
 
-  // Cada vez que cambie cualquier filtro o búsqueda, volvemos a la página 1
   useEffect(() => {
     setPaginaActual(1);
   }, [busqueda, filtroProveedor, filtroCategoria, filtroVencimiento, filtroEstadoStock]);
@@ -57,6 +97,7 @@ export default function SeccionInventario({ onProductoActualizado }) {
     } catch (error) {
       console.error("Error al cargar inventario:", error);
       setLoading(false);
+      mostrarAlerta("Error al Cargar", "No se pudo sincronizar la lista de inventario: " + (error?.message || JSON.stringify(error)), "error");
     }
   };
 
@@ -64,38 +105,65 @@ export default function SeccionInventario({ onProductoActualizado }) {
     try {
       const db = await Database.load("sqlite:suplementos.db");
       const operacion = cantidadCambio > 0 ? "+" : "-";
+      const esKilos = p.unidad_medida === "KG";
+      const delta = Math.abs(cantidadCambio);
+
+      const stockActual = parseFloat(p.stock) || 0;
+      if (cantidadCambio < 0 && stockActual < delta) {
+        mostrarAlerta("Stock insuficiente", `No puedes restar más stock del disponible (${stockActual} ${esKilos ? "kg" : "u"}).`, "warning");
+        return;
+      }
 
       await db.execute(
         `UPDATE suplementos SET stock = stock ${operacion} ? WHERE id = ?`,
-        [Math.abs(cantidadCambio), p.id]
+        [delta, p.id]
       );
 
       const tipoMov = cantidadCambio > 0 ? "ENTRADA" : "SALIDA";
       const fechaActual = new Date().toLocaleString("es-AR");
       await db.execute(
         `INSERT INTO movimientos (sku, nombre, lote, tipo, cantidad, motivo, fecha) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [p.sku, p.nombre, p.lote || "Sin lote", tipoMov, Math.abs(cantidadCambio), "Ajuste rápido desde tabla", fechaActual]
+        [
+          p.sku, 
+          p.nombre, 
+          p.lote || "Sin lote", 
+          tipoMov, 
+          delta, 
+          `Ajuste rápido desde tabla (${p.unidad_medida === "KG" ? "kg" : "u"})`, 
+          fechaActual
+        ]
       );
 
-      cargarInventario();
+      window.dispatchEvent(new Event("stockActualizado"));
       if (onProductoActualizado) onProductoActualizado();
     } catch (error) {
       console.error("Error al ajustar stock rápido:", error);
+      mostrarAlerta("Error de ajuste", "No se pudo actualizar el stock: " + (error?.message || JSON.stringify(error)), "error");
     }
   };
 
-  const eliminarProducto = async (id, nombre, lote) => {
-    if (!window.confirm(`¿Estás seguro de eliminar el registro de "${nombre}" (Lote: ${lote || 'Sin lote'})?`)) {
-      return;
-    }
+  const solicitarEliminarProducto = (id, nombre, lote) => {
+    setModalConfirmacion({
+      visible: true,
+      id,
+      nombre,
+      lote: lote || "Sin lote",
+    });
+  };
 
+  const confirmarEliminarProducto = async () => {
+    const { id } = modalConfirmacion;
     try {
       const db = await Database.load("sqlite:suplementos.db");
       await db.execute("DELETE FROM suplementos WHERE id = ?", [id]);
-      cargarInventario();
+      setModalConfirmacion({ visible: false, id: null, nombre: "", lote: "" });
+      
+      window.dispatchEvent(new Event("stockActualizado"));
       if (onProductoActualizado) onProductoActualizado();
     } catch (error) {
       console.error("Error al eliminar producto:", error);
+      setModalConfirmacion({ visible: false, id: null, nombre: "", lote: "" });
+      mostrarAlerta("Error al eliminar", "No se pudo borrar el producto: " + (error?.message || JSON.stringify(error)), "error");
     }
   };
 
@@ -103,48 +171,54 @@ export default function SeccionInventario({ onProductoActualizado }) {
     e.preventDefault();
     try {
       const db = await Database.load("sqlite:suplementos.db");
+      const esKilos = productoSeleccionado.unidad_medida === "KG";
+      const stockFinal = esKilos
+        ? parseFloat(productoSeleccionado.stock) || 0
+        : parseInt(productoSeleccionado.stock, 10) || 0;
+
       await db.execute(
         `UPDATE suplementos 
-         SET nombre = ?, categoria = ?, proveedor = ?, stock = ?, costo = ?, precio = ?, vencimiento = ?, lote = ? 
+         SET nombre = ?, categoria = ?, proveedor = ?, stock = ?, costo = ?, precio = ?, vencimiento = ?, lote = ?, unidad_medida = ? 
          WHERE id = ?`,
         [
           productoSeleccionado.nombre,
           productoSeleccionado.categoria,
           productoSeleccionado.proveedor,
-          parseInt(productoSeleccionado.stock) || 0,
+          stockFinal,
           parseFloat(productoSeleccionado.costo) || 0,
           parseFloat(productoSeleccionado.precio) || 0,
           productoSeleccionado.vencimiento,
           productoSeleccionado.lote,
+          productoSeleccionado.unidad_medida || "U",
           productoSeleccionado.id
         ]
       );
+
       setIsEditing(false);
       setModalOpen(false);
-      cargarInventario();
+      window.dispatchEvent(new Event("stockActualizado"));
       if (onProductoActualizado) onProductoActualizado();
     } catch (error) {
       console.error("Error al actualizar producto:", error);
+      mostrarAlerta("Error al Guardar", "No se pudieron actualizar los datos del producto: " + (error?.message || JSON.stringify(error)), "error");
     }
   };
 
-  // Función de exportación a Excel (CSV con Blob del navegador)
-const exportarAExcel = () => {
+  const exportarAExcel = () => {
     if (productos.length === 0) {
-      alert("No hay productos en el inventario para exportar.");
+      mostrarAlerta("Inventario Vacío", "No hay productos en el inventario para generar el archivo.", "warning");
       return;
     }
 
-    // Cabeceras limpias
-    const cabeceras = ["ID", "Nombre", "SKU", "Categoría", "Proveedor", "Lote", "Vencimiento", "Stock", "Costo ($)", "Precio Venta ($)"];
+    const cabeceras = ["ID", "Nombre", "SKU", "Categoría", "Proveedor", "Unidad", "Lote", "Vencimiento", "Stock", "Costo ($)", "Precio Venta ($)"];
     
-    // Mapeo seguro con punto y coma (;) para que Excel separe bien las columnas en español
     const filas = productos.map(p => [
       p.id,
       `"${(p.nombre || "").replace(/"/g, '""')}"`,
       `"${(p.sku || "").replace(/"/g, '""')}"`,
       `"${(p.categoria || "").replace(/"/g, '""')}"`,
       `"${(p.proveedor || "").replace(/"/g, '""')}"`,
+      `"${p.unidad_medida || "U"}"`,
       `"${(p.lote || "S/N").replace(/"/g, '""')}"`,
       p.vencimiento || "Sin fecha",
       p.stock || 0,
@@ -152,13 +226,11 @@ const exportarAExcel = () => {
       p.precio || 0
     ]);
 
-    // Unir usando punto y coma (;) como delimitador estándar para Excel en español
     const contenidoCSV = [
       cabeceras.join(";"),
       ...filas.map(f => f.join(";"))
     ].join("\n");
 
-    // Codificación UTF-8 con BOM para las tildes y eñes
     const blob = new Blob(["\uFEFF" + contenidoCSV], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     
@@ -185,7 +257,7 @@ const exportarAExcel = () => {
     const coincideProveedor = filtroProveedor === "TODOS" || p.proveedor === filtroProveedor;
     const coincideCategoria = filtroCategoria === "TODAS" || p.categoria === filtroCategoria;
 
-    const stock = parseInt(p.stock) || 0;
+    const stock = parseFloat(p.stock) || 0;
     let coincideEstadoStock = true;
     if (filtroEstadoStock === "DISPONIBLE") coincideEstadoStock = stock > 5;
     else if (filtroEstadoStock === "BAJO") coincideEstadoStock = stock > 0 && stock <= 5;
@@ -205,10 +277,9 @@ const exportarAExcel = () => {
     return coincideTexto && coincideProveedor && coincideCategoria && coincideEstadoStock && coincideVencimiento;
   });
 
-  // Cálculo de Paginación
   const totalPaginas = Math.ceil(productosFiltrados.length / productosPorPagina) || 1;
-  const indiceUltimoProducto = paginaActual * productosPorPagina;
-  const indicePrimerProducto = indiceUltimoProducto - productosPorPagina;
+  const indicePrimerProducto = (paginaActual - 1) * productosPorPagina;
+  const indiceUltimoProducto = indicePrimerProducto + productosPorPagina;
   const productosPaginados = productosFiltrados.slice(indicePrimerProducto, indiceUltimoProducto);
 
   if (loading) {
@@ -231,8 +302,14 @@ const exportarAExcel = () => {
             </div>
           </div>
 
-          {/* Grupo de botones de acción */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setModalImportarOpen(true)}
+              className="cursor-pointer px-3 py-1.5 bg-[#0b0f17] hover:bg-[#1a2333] border border-slate-700/60 text-slate-200 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm"
+            >
+              <UploadCloud className="w-3.5 h-3.5 text-[#CCFF00]" /> Importar de Excel
+            </button>           
+
             <button
               onClick={exportarAExcel}
               className="cursor-pointer px-3 py-1.5 bg-[#0b0f17] hover:bg-[#1a2333] border border-[#CCFF00]/40 text-[#CCFF00] rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-[0_0_10px_rgba(204,255,0,0.1)]"
@@ -337,26 +414,48 @@ const exportarAExcel = () => {
             <tbody className="divide-y divide-slate-800/60 text-xs">
               {productosPaginados.length > 0 ? (
                 productosPaginados.map((p) => {
-                  const stock = parseInt(p.stock) || 0;
+                  const stockNum = parseFloat(p.stock) || 0;
+                  const esKilos = p.unidad_medida === "KG";
                   const costo = parseFloat(p.costo) || 0;
                   const precio = parseFloat(p.precio) || 0;
                   const margenCalculado = costo > 0 ? (((precio - costo) / costo) * 100).toFixed(0) + "%" : "—";
 
+                  // Detección de vencimiento para borde naranja
+                  const hoy = new Date();
+                  const fechaVenc = p.vencimiento ? new Date(p.vencimiento) : null;
+                  const diffDias = fechaVenc ? Math.ceil((fechaVenc - hoy) / (1000 * 60 * 60 * 24)) : null;
+                  const estaVencido = diffDias !== null && diffDias < 0;
+
                   let badgeStockClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
                   let textoStock = "Disponible";
-                  if (stock <= 0) {
+                  if (stockNum <= 0) {
                     badgeStockClass = "bg-rose-500/10 text-rose-400 border-rose-500/20";
                     textoStock = "Agotado";
-                  } else if (stock <= 5) {
+                  } else if (stockNum <= 5) {
                     badgeStockClass = "bg-amber-500/10 text-amber-400 border-amber-500/20";
                     textoStock = "Stock bajo";
                   }
 
+                  const saltoAjuste = esKilos ? 0.5 : 1;
+
                   return (
-                    
-                    <tr key={p.id} className="hover:bg-[#1a2333]/40 transition-all">
+                    <tr 
+                      key={p.id} 
+                      className={`transition-all hover:bg-[#1a2333]/50 ${
+                        estaVencido 
+                          ? "border-2 border-orange-500/90 bg-orange-500/5 shadow-[0_0_12px_rgba(249,115,22,0.15)]" 
+                          : "border-b border-slate-800/60"
+                      }`}
+                    >
                       <td className="py-4 px-4">
-                        <div className="font-bold text-white">{p.nombre}</div>
+                        <div className="font-bold text-white flex items-center gap-2">
+                          {p.nombre}
+                          {estaVencido && (
+                            <span className="text-[10px] bg-orange-500/20 text-orange-400 border border-orange-500/40 px-2 py-0.5 rounded-full font-semibold">
+                              Vencido
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-slate-400 font-mono mt-0.5">{p.sku}</div>
                       </td>
                       <td className="py-4 px-3">
@@ -369,18 +468,23 @@ const exportarAExcel = () => {
                       </td>
                       <td className="py-4 px-3">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className="font-bold text-white text-sm">{stock}</span>
+                          <span className="font-bold text-white text-sm">
+                            {esKilos ? stockNum.toFixed(2) : stockNum}
+                            <span className="text-[10px] text-slate-400 ml-1 font-normal">
+                              {esKilos ? "kg" : "u"}
+                            </span>
+                          </span>
                           <div className="flex items-center border border-slate-700/80 rounded-lg overflow-hidden bg-[#0b0f17]">
                             <button 
-                              onClick={() => ajustarStockRapido(p, -1)}
-                              title="Restar 1"
+                              onClick={() => ajustarStockRapido(p, -saltoAjuste)}
+                              title={`Restar ${saltoAjuste} ${esKilos ? "kg" : "u"}`}
                               className="cursor-pointer px-2 py-0.5 hover:bg-rose-500/20 text-rose-400 transition-all"
                             >
                               <Minus className="w-3 h-3" />
                             </button>
                             <button 
-                              onClick={() => ajustarStockRapido(p, 1)}
-                              title="Sumar 1"
+                              onClick={() => ajustarStockRapido(p, saltoAjuste)}
+                              title={`Sumar ${saltoAjuste} ${esKilos ? "kg" : "u"}`}
                               className="cursor-pointer px-2 py-0.5 hover:bg-emerald-500/20 text-emerald-400 transition-all border-l border-slate-700/80"
                             >
                               <Plus className="w-3 h-3" />
@@ -402,21 +506,21 @@ const exportarAExcel = () => {
                         <button
                           onClick={() => { setProductoSeleccionado(p); setIsEditing(false); setModalOpen(true); }}
                           title="Ver Detalle"
-                          className="cursor-pointer p-1.5 bg-[#0b0f17] hover:bg-[#1a2333] text-slate-300 hover:text-white rounded-lg border border-slate-700/60 inline-flex"
+                          className="cursor-pointer p-1.5 bg-[#0b0f17] hover:bg-[#1a2333] text-slate-300 hover:text-white rounded-lg border border-slate-700/60 inline-flex transition-all"
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => { setProductoSeleccionado(p); setIsEditing(true); setModalOpen(true); }}
                           title="Editar"
-                          className="cursor-pointer p-1.5 bg-[#0b0f17] hover:bg-[#1a2333] text-blue-400 hover:text-blue-300 rounded-lg border border-slate-700/60 inline-flex"
+                          className="cursor-pointer p-1.5 bg-[#0b0f17] hover:bg-[#1a2333] text-blue-400 hover:text-blue-300 rounded-lg border border-slate-700/60 inline-flex transition-all"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => eliminarProducto(p.id, p.nombre, p.lote)}
+                          onClick={() => solicitarEliminarProducto(p.id, p.nombre, p.lote)}
                           title="Eliminar"
-                          className="cursor-pointer p-1.5 bg-[#0b0f17] hover:bg-[#1a2333] text-rose-400 hover:text-rose-300 rounded-lg border border-slate-700/60 inline-flex"
+                          className="cursor-pointer p-1.5 bg-[#0b0f17] hover:bg-[#1a2333] text-rose-400 hover:text-rose-300 rounded-lg border border-slate-700/60 inline-flex transition-all"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -516,7 +620,14 @@ const exportarAExcel = () => {
                   </div>
                   <div className="text-right bg-[#131b2e] border border-slate-700/60 px-4 py-2.5 rounded-xl">
                     <span className="text-[10px] text-slate-400 block uppercase font-bold">Stock Actual</span>
-                    <span className="text-2xl font-black text-white font-mono">{productoSeleccionado.stock}</span>
+                    <span className="text-2xl font-black text-white font-mono">
+                      {productoSeleccionado.unidad_medida === "KG" 
+                        ? Number(productoSeleccionado.stock).toFixed(2) 
+                        : productoSeleccionado.stock}
+                      <span className="text-xs text-slate-400 ml-1 font-normal">
+                        {productoSeleccionado.unidad_medida === "KG" ? "kg" : "u"}
+                      </span>
+                    </span>
                   </div>
                 </div>
 
@@ -556,7 +667,7 @@ const exportarAExcel = () => {
                     type="text"
                     value={productoSeleccionado.nombre}
                     onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, nombre: e.target.value })}
-                    className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                    className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
                     required
                   />
                 </div>
@@ -567,7 +678,7 @@ const exportarAExcel = () => {
                       type="text"
                       value={productoSeleccionado.categoria}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, categoria: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
                       required
                     />
                   </div>
@@ -577,28 +688,39 @@ const exportarAExcel = () => {
                       type="text"
                       value={productoSeleccionado.proveedor || ""}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, proveedor: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
                     />
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-slate-300 font-semibold mb-1">Stock</label>
-                    <input
-                      type="number"
-                      value={productoSeleccionado.stock}
-                      onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, stock: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
-                      required
-                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        step={productoSeleccionado.unidad_medida === "KG" ? "0.01" : "1"}
+                        value={productoSeleccionado.stock}
+                        onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, stock: e.target.value })}
+                        className="flex-1 bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
+                        required
+                      />
+                      <select
+                        value={productoSeleccionado.unidad_medida || "U"}
+                        onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, unidad_medida: e.target.value })}
+                        className="bg-[#0b0f17] border border-slate-700 rounded-xl px-2 text-xs font-semibold text-[#CCFF00] cursor-pointer"
+                      >
+                        <option value="U">U</option>
+                        <option value="KG">Kg</option>
+                      </select>
+                    </div>
                   </div>
                   <div>
-                    <label className="block text-slate-300 font-semibold smudge mb-1">Lote</label>
+                    <label className="block text-slate-300 font-semibold mb-1">Lote</label>
                     <input
                       type="text"
                       value={productoSeleccionado.lote || ""}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, lote: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
                     />
                   </div>
                   <div>
@@ -607,7 +729,7 @@ const exportarAExcel = () => {
                       type="date"
                       value={productoSeleccionado.vencimiento || ""}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, vencimiento: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white [color-scheme:dark]"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white [color-scheme:dark] focus:outline-none focus:border-[#CCFF00]"
                     />
                   </div>
                 </div>
@@ -619,7 +741,7 @@ const exportarAExcel = () => {
                       step="0.01"
                       value={productoSeleccionado.costo}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, costo: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
                       required
                     />
                   </div>
@@ -630,14 +752,14 @@ const exportarAExcel = () => {
                       step="0.01"
                       value={productoSeleccionado.precio}
                       onChange={(e) => setProductoSeleccionado({ ...productoSeleccionado, precio: e.target.value })}
-                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white"
+                      className="w-full bg-[#0b0f17] border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#CCFF00]"
                       required
                     />
                   </div>
                 </div>
                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
-                  <button type="button" onClick={() => setIsEditing(false)} className="cursor-pointer px-5 py-2.5 bg-[#1a2333] text-slate-200 rounded-xl font-medium">Cancelar</button>
-                  <button type="submit" className="cursor-pointer px-5 py-2.5 bg-[#CCFF00] text-black font-bold rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.25)] flex items-center gap-1.5">
+                  <button type="button" onClick={() => setIsEditing(false)} className="cursor-pointer px-5 py-2.5 bg-[#1a2333] text-slate-200 rounded-xl font-medium transition-all">Cancelar</button>
+                  <button type="submit" className="cursor-pointer px-5 py-2.5 bg-[#CCFF00] text-black font-bold rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.25)] flex items-center gap-1.5 transition-all">
                     <Check className="w-4 h-4" /> Guardar Cambios
                   </button>
                 </div>
@@ -646,6 +768,85 @@ const exportarAExcel = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL DE CONFIRMACIÓN DE ELIMINACIÓN */}
+      {modalConfirmacion.visible && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-[#131b2e] border border-slate-700/80 rounded-3xl w-full max-w-md p-6 shadow-2xl relative text-slate-100 flex flex-col items-center text-center">
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-2xl mb-4">
+              <Trash2 className="w-8 h-8" />
+            </div>
+
+            <h3 className="text-lg font-bold text-white mb-2">
+              ¿Eliminar producto?
+            </h3>
+            
+            <p className="text-xs text-slate-300 leading-relaxed mb-6">
+              Estás a punto de eliminar el registro de <span className="font-bold text-white">"{modalConfirmacion.nombre}"</span> (Lote: {modalConfirmacion.lote}). Esta acción no se puede deshacer.
+            </p>
+
+            <div className="flex gap-3 w-full">
+              <button
+                type="button"
+                onClick={() => setModalConfirmacion({ visible: false, id: null, nombre: "", lote: "" })}
+                className="cursor-pointer flex-1 py-2.5 px-4 bg-[#1a2333] hover:bg-[#232f46] text-slate-200 text-xs font-semibold rounded-xl border border-slate-700/60 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmarEliminarProducto}
+                className="cursor-pointer flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition-all shadow-[0_0_15px_rgba(225,29,72,0.3)]"
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PERSONALIZADO DE ALERTA / NOTIFICACIÓN */}
+      {modalAlerta.visible && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-[#131b2e] border border-slate-700/80 rounded-3xl w-full max-w-md p-6 shadow-2xl relative text-slate-100 flex flex-col items-center text-center">
+            
+            <div className={`p-3 rounded-2xl mb-4 border ${
+              modalAlerta.tipo === "warning"
+                ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                : modalAlerta.tipo === "success"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : "bg-rose-500/10 border-rose-500/30 text-rose-400"
+            }`}>
+              {modalAlerta.tipo === "warning" && <AlertTriangle className="w-8 h-8" />}
+              {modalAlerta.tipo === "error" && <XCircle className="w-8 h-8" />}
+              {modalAlerta.tipo === "success" && <CheckCircle2 className="w-8 h-8" />}
+            </div>
+
+            <h3 className="text-lg font-bold text-white mb-2">
+              {modalAlerta.titulo}
+            </h3>
+            
+            <p className="text-xs text-slate-300 leading-relaxed mb-6">
+              {modalAlerta.mensaje}
+            </p>
+
+            <button
+              type="button"
+              onClick={cerrarAlerta}
+              className="cursor-pointer w-full py-2.5 px-4 bg-[#CCFF00] hover:bg-[#b8e600] text-black text-xs font-bold rounded-xl transition-all shadow-[0_0_15px_rgba(204,255,0,0.2)]"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
+      <ModalImportarExcel 
+  isOpen={modalImportarOpen} 
+  onClose={() => setModalImportarOpen(false)} 
+  onImportSuccess={() => cargarInventario()} 
+/>
+
     </div>
   );
 }
